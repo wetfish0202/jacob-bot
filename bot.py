@@ -5,8 +5,8 @@ import aiohttp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-TOKEN = "8957677405:AAG0kBcs7AW-3IvYgIxJm2IHplI15x3sJn0"
-
+import os
+   TOKEN = os.environ.get("BOT_TOKEN")
 # ─────────────────────────────────────────
 #  CROP DEFINITIONS
 #  Keys match the integer codes the API returns (0–9)
