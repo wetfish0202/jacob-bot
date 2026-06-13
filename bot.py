@@ -99,7 +99,6 @@ async def fetch_contests() -> list:
         upcoming = []
 
         for contest in data:
-            # Handle different possible field names
             ts = contest.get("timestamp") or contest.get("time") or contest.get("start")
             if not ts or ts <= now_ms:
                 continue
@@ -153,25 +152,6 @@ async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def next_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    contests = await fetch_contests()
-    if not contests:
-        await update.message.reply_text("⚠️ Couldn't fetch data right now. Try again later.")
-        return
-
-    lines = ["📅 *Upcoming Contests:*\n"]
-    for c in contests[:6]:
-        mins       = minutes_until(c["timestamp"])
-        crop_text  = "  ".join(label(k) for k in c["crops"])
-        if mins < 60:
-            time_str = f"in {int(mins)}m"
-        else:
-            time_str = f"in {int(mins // 60)}h {int(mins % 60)}m"
-        lines.append(f"{crop_text}\n_starts {time_str}_\n")
-
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-
-
 # ─────────────────────────────────────────
 #  BUTTON HANDLER
 # ─────────────────────────────────────────
@@ -190,31 +170,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=main_menu(data["fav_all"]),
         )
-        # ── Next Contests ──────────────────────────────────────────────────
-    elif action == "next":
-        contests = await fetch_contests()
-    if not contests:
-        await query.edit_message_text(
-            "⚠️ Couldn't fetch data right now. Try again later.",
-            reply_markup=main_menu(data["fav_all"]),
-        )
-        return
-
-    lines = ["📅 *Upcoming Contests:*\n"]
-    for c in contests[:6]:
-        mins      = minutes_until(c["timestamp"])
-        crop_text = "  ".join(label(k) for k in c["crops"])
-        if mins < 60:
-            time_str = f"in {int(mins)}m"
-        else:
-            time_str = f"in {int(mins // 60)}h {int(mins % 60)}m"
-        lines.append(f"{crop_text}\n_starts {time_str}_\n")
-
-    await query.edit_message_text(
-        "\n".join(lines),
-        parse_mode="Markdown",
-        reply_markup=main_menu(data["fav_all"]),
-    )
 
     # ── My Favorites ───────────────────────────────────────────────────
     elif action == "fav":
@@ -246,6 +201,32 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "🔕 Cleared. No alerts until you add crops again.",
             reply_markup=main_menu(False),
+        )
+
+    # ── Next Contests ──────────────────────────────────────────────────
+    elif action == "next":
+        contests = await fetch_contests()
+        if not contests:
+            await query.edit_message_text(
+                "⚠️ Couldn't fetch data right now. Try again later.",
+                reply_markup=main_menu(data["fav_all"]),
+            )
+            return
+
+        lines = ["📅 *Upcoming Contests:*\n"]
+        for c in contests[:6]:
+            mins      = minutes_until(c["timestamp"])
+            crop_text = "  ".join(label(k) for k in c["crops"])
+            if mins < 60:
+                time_str = f"in {int(mins)}m"
+            else:
+                time_str = f"in {int(mins // 60)}h {int(mins % 60)}m"
+            lines.append(f"{crop_text}\n_starts {time_str}_\n")
+
+        await query.edit_message_text(
+            "\n".join(lines),
+            parse_mode="Markdown",
+            reply_markup=main_menu(data["fav_all"]),
         )
 
     # ── Add menu ───────────────────────────────────────────────────────
@@ -335,7 +316,6 @@ async def alert_loop(app):
 
                 for user_id, udata in list(user_data.items()):
 
-                    # Which of this user's favourites are in this contest?
                     matched = [
                         k for k in crop_keys
                         if udata["fav_all"] or k in udata["list"]
@@ -344,12 +324,10 @@ async def alert_loop(app):
                     if not matched:
                         continue
 
-                    # One alert per user per contest — keyed by (user_id, timestamp)
                     alert_id = (user_id, ts)
                     if alert_id in sent_alerts:
                         continue
 
-                    # Crops in the contest the user didn't favourite
                     others = [k for k in crop_keys if k not in matched]
 
                     matched_text = "  ".join(label(k) for k in matched)
@@ -397,7 +375,6 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("test",  test_cmd))
-    app.add_handler(CommandHandler("next",  next_cmd))
     app.add_handler(CallbackQueryHandler(button_handler))
 
     print("Bot running…")
