@@ -108,7 +108,12 @@ async def fetch_contests() -> list:
                 elif isinstance(c, dict):
                     crop_codes.append(c.get("id", c.get("crop", -1)))
 
-            crop_keys = [CROP_MAP[code][0] for code in crop_codes if code in CROP_MAP]
+            crop_keys = []
+            for code in crop_codes:
+                if code in CROP_MAP:
+                    crop_keys.append(CROP_MAP[code][0])
+                else:
+                    print(f"[unknown crop code] {code}")
             upcoming.append({"timestamp": ts, "crops": crop_keys})
 
         upcoming.sort(key=lambda x: x["timestamp"])
