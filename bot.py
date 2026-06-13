@@ -152,7 +152,11 @@ async def show_next(update, context, edit=False, query=None):
     text = "\n".join(lines)
 
     if edit:
-        await query.edit_message_text(text, parse_mode="Markdown")
+        await query.edit_message_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=main_menu(data["fav_all"])
+        )
     else:
         await update.message.reply_text(text, parse_mode="Markdown")
 
