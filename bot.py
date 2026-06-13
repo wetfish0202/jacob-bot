@@ -13,16 +13,19 @@ TOKEN = os.environ.get("BOT_TOKEN")
 #  Integer codes match what the API returns
 # ─────────────────────────────────────────
 CROP_MAP = {
-    0: ("cactus",     "🌵 Cactus"),
-    1: ("carrot",     "🥕 Carrot"),
-    2: ("cocoa",      "🌰 Cocoa Beans"),
-    3: ("melon",      "🍉 Melon"),
-    4: ("mushroom",   "🍄 Mushroom"),
-    5: ("netherwart", "🌌 Nether Wart"),
-    6: ("potato",     "🥔 Potato"),
-    7: ("pumpkin",    "🎃 Pumpkin"),
-    8: ("sugarcane",  "🎋 Sugar Cane"),
-    9: ("wheat",      "🌾 Wheat"),
+    0:  ("cactus",     "🌵 Cactus"),
+    1:  ("carrot",     "🥕 Carrot"),
+    2:  ("cocoa",      "🌰 Cocoa Beans"),
+    3:  ("melon",      "🍉 Melon"),
+    4:  ("mushroom",   "🍄 Mushroom"),
+    5:  ("netherwart", "🌌 Nether Wart"),
+    6:  ("potato",     "🥔 Potato"),
+    7:  ("pumpkin",    "🎃 Pumpkin"),
+    8:  ("sugarcane",  "🎋 Sugar Cane"),
+    9:  ("wheat",      "🌾 Wheat"),
+    10: ("sunflower",  "🌻 Sunflower"),
+    11: ("moonflower", "🌸 Moonflower"),
+    12: ("wildrose",   "🌹 Wild Rose"),
 }
 
 KEY_TO_CODE  = {v[0]: k   for k, v in CROP_MAP.items()}
