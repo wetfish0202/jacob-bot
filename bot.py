@@ -1,12 +1,12 @@
 import asyncio
 import time
 import aiohttp
+import os
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-import os
-   TOKEN = os.environ.get("BOT_TOKEN")
+TOKEN = os.environ.get("BOT_TOKEN")
 # ─────────────────────────────────────────
 #  CROP DEFINITIONS
 #  Keys match the integer codes the API returns (0–9)
