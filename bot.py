@@ -217,7 +217,7 @@ async def get_jacob_stats(uuid: str, crop_key: str, mode: str) -> dict | None:
 
         member = members.get(uuid, {})
         print(f"[hypixel] member found: {bool(member)}")
-
+        print(f"[hypixel] member keys: {list(member.keys())}")
         jacob = member.get("jacob2") or member.get("jacob", {})
         print(f"[hypixel] jacob found: {bool(jacob)}")
 
