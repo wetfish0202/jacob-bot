@@ -11,7 +11,7 @@ from telegram.ext import (
 
 TOKEN           = os.environ.get("BOT_TOKEN")
 HYPIXEL_API_KEY = os.environ.get("HYPIXEL_API_KEY")
-
+print(f"[startup] HYPIXEL_API_KEY = {HYPIXEL_API_KEY!r}")
 # ─────────────────────────────────────────
 #  CROP DEFINITIONS
 # ─────────────────────────────────────────
