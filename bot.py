@@ -11,7 +11,6 @@ from telegram.ext import (
 
 TOKEN           = os.environ.get("BOT_TOKEN")
 HYPIXEL_API_KEY = os.environ.get("HYPIXEL_API_KEY")
-print(f"[startup] HYPIXEL_API_KEY = {HYPIXEL_API_KEY!r}")
 
 # ─────────────────────────────────────────
 #  CROP DEFINITIONS
@@ -72,11 +71,14 @@ MEDAL_EMOJI = {
     "DIAMOND":  "💠",
 }
 
-KEY_TO_CODE  = {v[0]: k   for k, v in CROP_MAP.items()}
+KEY_TO_CODE  = {v[0]: k    for k, v in CROP_MAP.items()}
 KEY_TO_LABEL = {v[0]: v[1] for v in CROP_MAP.values()}
 ALL_KEYS     = list(KEY_TO_CODE.keys())
 
-MAX_CROPS   = 3
+MAX_CROPS      = 3
+DAILY_LOOKUPS  = 3
+WHITELIST_IGNS = {"yo_soy_juanittoo"}   # lowercased for comparison
+
 JACOB_API   = "https://jacobs.strassburger.dev/api/jacobcontests"
 MOJANG_API  = "https://api.mojang.com/users/profiles/minecraft/{ign}"
 HYPIXEL_API = "https://api.hypixel.net/v2/skyblock/profiles?uuid={uuid}"
@@ -84,9 +86,13 @@ HYPIXEL_API = "https://api.hypixel.net/v2/skyblock/profiles?uuid={uuid}"
 # ─────────────────────────────────────────
 #  STATE
 # ─────────────────────────────────────────
-user_data       = {}
+user_data       = {}    # {user_id: {"fav_all": bool, "list": [key, ...]}}
 sent_alerts     = set()
 waiting_for_ign = set()
+
+# Lookup rate limit: {user_id: [timestamp, timestamp, ...]}
+# Keeps only the timestamps of lookups in the last 24h
+lookup_log = {}
 
 
 # ─────────────────────────────────────────
@@ -101,6 +107,44 @@ def label(key: str) -> str:
 
 def minutes_until(ts_ms: int) -> float:
     return (ts_ms - time.time() * 1000) / 60_000
+
+
+# ─────────────────────────────────────────
+#  RATE LIMIT
+# ─────────────────────────────────────────
+WINDOW = 24 * 3600  # 24 hours in seconds
+
+def check_lookup_limit(user_id: int, ign: str) -> tuple[bool, str]:
+    """
+    Returns (allowed, message).
+    Whitelisted IGNs are always allowed.
+    Otherwise max DAILY_LOOKUPS per 24h window.
+    """
+    if ign.lower() in WHITELIST_IGNS:
+        return True, ""
+
+    now       = time.time()
+    history   = lookup_log.get(user_id, [])
+    # Keep only lookups within the last 24h
+    history   = [t for t in history if now - t < WINDOW]
+    lookup_log[user_id] = history
+
+    if len(history) >= DAILY_LOOKUPS:
+        # Time until the oldest lookup expires
+        oldest       = min(history)
+        resets_in    = WINDOW - (now - oldest)
+        hours        = int(resets_in // 3600)
+        mins         = int((resets_in % 3600) // 60)
+        reset_str    = f"{hours}h {mins}m" if hours else f"{mins}m"
+        return False, (
+            f"⏳ You've used all {DAILY_LOOKUPS} lookups for today.\n\n"
+            f"Resets in *{reset_str}*."
+        )
+
+    return True, ""
+
+def record_lookup(user_id: int):
+    lookup_log.setdefault(user_id, []).append(time.time())
 
 
 # ─────────────────────────────────────────
@@ -137,9 +181,16 @@ def lookup_crop_keyboard(ign: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 def lookup_period_keyboard(ign: str, crop: str) -> InlineKeyboardMarkup:
+    crop_label = label(crop).split(" ", 1)[-1]  # strip emoji for button text
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏆 All Time Best",    callback_data=f"lk_stat_{ign}_{crop}_alltime")],
-        [InlineKeyboardButton("📆 Recent (last 10)", callback_data=f"lk_stat_{ign}_{crop}_recent")],
+        [InlineKeyboardButton(
+            f"🏆 Best {crop_label} Contest (All Time)",
+            callback_data=f"lk_stat_{ign}_{crop}_alltime"
+        )],
+        [InlineKeyboardButton(
+            f"📆 Last 10 {crop_label} Contests",
+            callback_data=f"lk_stat_{ign}_{crop}_recent"
+        )],
         back_button(),
     ])
 
@@ -263,7 +314,6 @@ async def get_jacob_stats(uuid: str, crop_key: str, mode: str) -> dict | None:
                 "total":            len(crop_contests),
                 "collection_total": collection_total,
             }
-
         else:
             recent  = sorted_contests[:10]
             entries = []
@@ -324,6 +374,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     waiting_for_ign.discard(user_id)
     ign = update.message.text.strip()
 
+    # Check rate limit BEFORE hitting any API
+    allowed, limit_msg = check_lookup_limit(user_id, ign)
+    if not allowed:
+        await update.message.reply_text(
+            limit_msg,
+            parse_mode="Markdown",
+            reply_markup=back_only(),
+        )
+        return
+
     msg  = await update.message.reply_text(f"🔍 Looking up *{ign}*…", parse_mode="Markdown")
     uuid = await get_uuid(ign)
 
@@ -334,6 +394,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=back_only(),
         )
         return
+
+    # Only record after a successful lookup
+    record_lookup(user_id)
 
     context.user_data["lookup_ign"]  = ign
     context.user_data["lookup_uuid"] = uuid
@@ -532,10 +595,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         collection_total = stats.get("collection_total", 0)
+        crop_label       = label(crop_key)
 
         if not stats.get("found"):
             await query.edit_message_text(
-                f"😔 *{ign}* has no {label(crop_key)} contest data.\n\n"
+                f"😔 *{ign}* has no {crop_label} contest data.\n\n"
                 f"*Total Harvested:* {collection_total:,}\n\n"
                 "They may not have participated in any contests, or their profile is private.",
                 parse_mode="Markdown",
@@ -548,27 +612,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             emoji    = MEDAL_EMOJI.get(medal, "❓")
             pos      = stats["position"]
             out_of   = stats["out_of"]
-            rank_str = f"#{pos} out of {out_of}" if isinstance(pos, int) else "unknown rank"
+            rank_str = f"#{pos} out of {out_of}" if isinstance(pos, int) else "unknown"
 
             text = (
-                f"🏆 *{ign}* — {label(crop_key)}\n\n"
+                f"🏆 *{ign}* — Best {crop_label} Contest of All Time\n\n"
                 f"*Total Harvested:* {collection_total:,}\n"
                 f"*Best Score:* {stats['score']:,}\n"
                 f"*Best Medal:* {emoji} {medal}\n"
                 f"*Rank that run:* {rank_str}\n"
-                f"*Total contests:* {stats['total']}"
+                f"*Total {crop_label} contests:* {stats['total']}"
             )
 
         else:
             lines = [
-                f"📆 *{ign}* — {label(crop_key)} (last {len(stats['entries'])})\n",
+                f"📆 *{ign}* — Last {len(stats['entries'])} {crop_label} Contests\n",
                 f"*Total Harvested:* {collection_total:,}\n",
             ]
             for i, e in enumerate(stats["entries"], 1):
                 medal = e["medal"]
                 emoji = MEDAL_EMOJI.get(medal, "❓")
                 lines.append(f"{i}. {e['score']:,}  {emoji} {medal}")
-            lines.append(f"\n_Total contests: {stats['total']}_")
+            lines.append(f"\n_Total {crop_label} contests: {stats['total']}_")
             text = "\n".join(lines)
 
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=back_only())
