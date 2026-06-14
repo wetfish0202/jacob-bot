@@ -191,11 +191,6 @@ async def get_uuid(ign: str) -> str | None:
 
 
 async def get_jacob_stats(uuid: str, crop_key: str, mode: str) -> dict | None:
-    """
-    Fetch a player's Jacob contest stats from Hypixel API.
-    Returns a dict with best score, medal, and recent results.
-    mode: "alltime" | "recent"
-    """
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -203,61 +198,66 @@ async def get_jacob_stats(uuid: str, crop_key: str, mode: str) -> dict | None:
                 headers={"API-Key": HYPIXEL_API_KEY},
                 timeout=aiohttp.ClientTimeout(total=10)
             ) as resp:
+                print(f"[hypixel] status: {resp.status}")
                 if resp.status != 200:
+                    print(f"[hypixel] bad status, returning None")
                     return None
                 data = await resp.json()
 
-        if not data.get("success"):
-            return None
-
+        print(f"[hypixel] success: {data.get('success')}")
         profiles = data.get("profiles", [])
+        print(f"[hypixel] profiles: {len(profiles)}")
         if not profiles:
             return None
 
-        # Use the last active profile
         profile = max(profiles, key=lambda p: p.get("last_save", 0))
-
         members = profile.get("members", {})
-        member  = members.get(uuid.replace("-", ""), {})
-        jacob   = member.get("jacob2") or member.get("jacob", {})
+        print(f"[hypixel] member keys: {list(members.keys())}")
+        print(f"[hypixel] uuid lookup: {uuid}")
+
+        member = members.get(uuid, {})
+        print(f"[hypixel] member found: {bool(member)}")
+
+        jacob = member.get("jacob2") or member.get("jacob", {})
+        print(f"[hypixel] jacob found: {bool(jacob)}")
 
         if not jacob:
             return None
 
         contests = jacob.get("contests", {})
-        hkey     = HYPIXEL_CROP_KEY.get(crop_key, "")
+        hkey = HYPIXEL_CROP_KEY.get(crop_key, "")
 
-        # Filter contests for this crop
         crop_contests = {
             k: v for k, v in contests.items()
             if f":{hkey}" in k
         }
 
+        print(f"[hypixel] crop contests found: {len(crop_contests)}")
+
         if not crop_contests:
             return {"found": False}
 
-        # Sort by timestamp (key format: "year:month:day:CROP")
         sorted_contests = sorted(crop_contests.items(), key=lambda x: x[0], reverse=True)
 
         if mode == "alltime":
             best = max(crop_contests.values(), key=lambda c: c.get("collected", 0))
             return {
-                "found":     True,
-                "mode":      "alltime",
-                "score":     best.get("collected", 0),
-                "medal":     best.get("claimed_medal", "NONE").upper(),
-                "position":  best.get("claimed_position", "?"),
-                "out_of":    best.get("claimed_participants", "?"),
-                "total":     len(crop_contests),
+                "found":    True,
+                "mode":     "alltime",
+                "score":    best.get("collected", 0),
+                "medal":    best.get("claimed_medal", "NONE").upper(),
+                "position": best.get("claimed_position", "?"),
+                "out_of":   best.get("claimed_participants", "?"),
+                "total":    len(crop_contests),
             }
 
-        else:  # recent
+        else:
             recent = sorted_contests[:10]
             entries = []
             for _, v in recent:
                 entries.append({
-                    "score":  v.get("collected", 0),
-                    "medal":  v.get("claimed_medal", "NONE").upper(),
+                    "score": v.get("collected", 0),
+                    "medal": v.get("claimed_medal", "NONE").upper(),
                 })
             return {
                 "found":   True,
