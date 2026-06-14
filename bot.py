@@ -10,7 +10,6 @@ TOKEN = os.environ.get("BOT_TOKEN")
 
 # ─────────────────────────────────────────
 #  CROP DEFINITIONS
-#  Integer codes match what the API returns
 # ─────────────────────────────────────────
 CROP_MAP = {
     0:  ("cactus",     "🌵 Cactus"),
@@ -38,8 +37,8 @@ API_URL   = "https://jacobs.strassburger.dev/api/jacobcontests"
 # ─────────────────────────────────────────
 #  STATE
 # ─────────────────────────────────────────
-user_data   = {}   # {user_id: {"fav_all": bool, "list": [key, ...]}}
-sent_alerts = set()  # {(user_id, contest_timestamp_ms)}
+user_data   = {}
+sent_alerts = set()
 
 
 # ─────────────────────────────────────────
@@ -61,6 +60,10 @@ def minutes_until(ts_ms: int) -> float:
 # ─────────────────────────────────────────
 #  KEYBOARDS
 # ─────────────────────────────────────────
+def back_button() -> list:
+    return [InlineKeyboardButton("« Back", callback_data="back")]
+
+
 def main_menu(fav_all: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⭐ My Favorites",  callback_data="fav")],
@@ -75,9 +78,13 @@ def main_menu(fav_all: bool = False) -> InlineKeyboardMarkup:
     ])
 
 
+def back_only() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([back_button()])
+
+
 def crop_keyboard(prefix: str, keys: list) -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(label(k), callback_data=f"{prefix}{k}")] for k in keys]
-    buttons.append([InlineKeyboardButton("« Back", callback_data="back")])
+    buttons.append(back_button())
     return InlineKeyboardMarkup(buttons)
 
 
@@ -85,11 +92,6 @@ def crop_keyboard(prefix: str, keys: list) -> InlineKeyboardMarkup:
 #  API
 # ─────────────────────────────────────────
 async def fetch_contests() -> list:
-    """
-    Fetches upcoming contests from the API.
-    Returns a list of dicts: {"timestamp": int (ms), "crops": [key, ...]}
-    sorted by timestamp ascending.
-    """
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(API_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -117,6 +119,7 @@ async def fetch_contests() -> list:
                     crop_keys.append(CROP_MAP[code][0])
                 else:
                     print(f"[unknown crop code] {code}")
+
             upcoming.append({"timestamp": ts, "crops": crop_keys})
 
         upcoming.sort(key=lambda x: x["timestamp"])
@@ -163,7 +166,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data    = get_user(user_id)
     action  = query.data
 
-    # ── Back ───────────────────────────────────────────────────────────
+    # ── Back → Main Menu ───────────────────────────────────────────────
     if action == "back":
         await query.edit_message_text(
             "🌾 *Jacob's Farming Contest Bot*\nChoose an option:",
@@ -180,8 +183,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⭐ *Your Favorites:*\n\nNone yet — use ➕ Add Crop to get started."
         )
         await query.edit_message_text(
-            text, parse_mode="Markdown",
-            reply_markup=main_menu(data["fav_all"]),
+            text,
+            parse_mode="Markdown",
+            reply_markup=back_only(),
         )
 
     # ── Fav All ────────────────────────────────────────────────────────
@@ -191,7 +195,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "⭐🔥 *Fav All enabled!*\n\nYou'll get alerts for every crop contest.",
             parse_mode="Markdown",
-            reply_markup=main_menu(True),
+            reply_markup=back_only(),
         )
 
     # ── Clear All ──────────────────────────────────────────────────────
@@ -199,8 +203,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["fav_all"] = False
         data["list"]    = []
         await query.edit_message_text(
-            "🔕 Cleared. No alerts until you add crops again.",
-            reply_markup=main_menu(False),
+            "🔕 *Cleared.*\n\nNo alerts until you add crops again.",
+            parse_mode="Markdown",
+            reply_markup=back_only(),
         )
 
     # ── Next Contests ──────────────────────────────────────────────────
@@ -209,7 +214,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not contests:
             await query.edit_message_text(
                 "⚠️ Couldn't fetch data right now. Try again later.",
-                reply_markup=main_menu(data["fav_all"]),
+                reply_markup=back_only(),
             )
             return
 
@@ -226,7 +231,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "\n".join(lines),
             parse_mode="Markdown",
-            reply_markup=main_menu(data["fav_all"]),
+            reply_markup=back_only(),
         )
 
     # ── Add menu ───────────────────────────────────────────────────────
@@ -234,8 +239,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         available = [k for k in ALL_KEYS if k not in data["list"]]
         if not available:
             await query.edit_message_text(
-                "✅ You're already tracking all crops!",
-                reply_markup=main_menu(data["fav_all"]),
+                "✅ *You're already tracking all crops!*",
+                parse_mode="Markdown",
+                reply_markup=back_only(),
             )
             return
         await query.edit_message_text(
@@ -254,23 +260,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if len(data["list"]) >= MAX_CROPS:
             await query.edit_message_text(
-                f"⚠️ Max {MAX_CROPS} crops reached.\nRemove one first, or use Fav All.",
-                reply_markup=main_menu(data["fav_all"]),
+                f"⚠️ *Max {MAX_CROPS} crops reached.*\n\nRemove one first, or use Fav All.",
+                parse_mode="Markdown",
+                reply_markup=back_only(),
             )
             return
         data["list"].append(key)
         await query.edit_message_text(
-            f"✅ Added *{label(key)}* to your favorites!",
+            f"✅ *{label(key)}* added to your favorites!",
             parse_mode="Markdown",
-            reply_markup=main_menu(data["fav_all"]),
+            reply_markup=back_only(),
         )
 
     # ── Remove menu ────────────────────────────────────────────────────
     elif action == "remove":
         if not data["list"]:
             await query.edit_message_text(
-                "Nothing to remove.",
-                reply_markup=main_menu(data["fav_all"]),
+                "ℹ️ *Nothing to remove.*",
+                parse_mode="Markdown",
+                reply_markup=back_only(),
             )
             return
         await query.edit_message_text(
@@ -284,11 +292,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if key in data["list"]:
             data["list"].remove(key)
         if data["fav_all"]:
-            data["fav_all"] = False   # partial removal exits fav_all mode
+            data["fav_all"] = False
         await query.edit_message_text(
-            f"🗑 Removed *{label(key)}*.",
+            f"🗑 *{label(key)}* removed.",
             parse_mode="Markdown",
-            reply_markup=main_menu(data["fav_all"]),
+            reply_markup=back_only(),
         )
 
 
@@ -310,12 +318,10 @@ async def alert_loop(app):
                 crop_keys = contest["crops"]
                 mins      = minutes_until(ts)
 
-                # Trigger window: 8–12 minutes out
                 if not (8.0 < mins < 12.0):
                     continue
 
                 for user_id, udata in list(user_data.items()):
-
                     matched = [
                         k for k in crop_keys
                         if udata["fav_all"] or k in udata["list"]
@@ -350,7 +356,6 @@ async def alert_loop(app):
                     except Exception as e:
                         print(f"[send error] user {user_id}: {e}")
 
-            # Prune alert IDs older than 2 hours
             stale = {a for a in sent_alerts if (now_ms - a[1]) > 2 * 3600 * 1000}
             sent_alerts.difference_update(stale)
 
