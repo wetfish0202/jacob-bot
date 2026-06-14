@@ -267,8 +267,10 @@ async def get_jacob_stats(uuid: str, crop_key: str, mode: str) -> dict | None:
             }
 
     except Exception as e:
-        print(f"[Hypixel API error] {e}")
-        return None
+    print(f"[Hypixel API error] {e}")
+    import traceback
+    traceback.print_exc()
+    return None
 
 
 # ─────────────────────────────────────────
