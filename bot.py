@@ -224,122 +224,38 @@ async def get_uuid(ign: str) -> str | None:
 
 
 async def get_elite_rank(ign: str, crop_key: str) -> tuple[int | None, int | None]:
-    """
-    Returns (alltime_rank, monthly_rank) from Elite leaderboard.
-    None if not ranked / API error.
-    """
     slug = ELITE_CROP_SLUG.get(crop_key, crop_key)
     alltime_rank = None
     monthly_rank = None
 
     try:
         async with aiohttp.ClientSession() as session:
-            # All time
             async with session.get(
                 ELITE_API.format(crop=slug, ign=ign),
                 timeout=aiohttp.ClientTimeout(total=8)
             ) as resp:
+                print(f"[elite] alltime status: {resp.status} url: {ELITE_API.format(crop=slug, ign=ign)}")
                 if resp.status == 200:
                     data = await resp.json(content_type=None)
+                    print(f"[elite] alltime data: {data}")
                     alltime_rank = data.get("rank") or data.get("position")
 
-            # Monthly
             async with session.get(
                 ELITE_API_MONTHLY.format(crop=slug, ign=ign),
                 timeout=aiohttp.ClientTimeout(total=8)
             ) as resp:
+                print(f"[elite] monthly status: {resp.status} url: {ELITE_API_MONTHLY.format(crop=slug, ign=ign)}")
                 if resp.status == 200:
                     data = await resp.json(content_type=None)
+                    print(f"[elite] monthly data: {data}")
                     monthly_rank = data.get("rank") or data.get("position")
 
     except Exception as e:
         print(f"[Elite API error] {e}")
-
-    return alltime_rank, monthly_rank
-
-
-async def get_jacob_stats(uuid: str, crop_key: str, mode: str) -> dict | None:
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                HYPIXEL_API.format(uuid=uuid),
-                headers={"API-Key": HYPIXEL_API_KEY},
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-
-        if not data.get("success"):
-            return None
-
-        profiles = data.get("profiles", [])
-        if not profiles:
-            return None
-
-        profile = max(profiles, key=lambda p: p.get("last_save", 0))
-        members = profile.get("members", {})
-        member  = members.get(uuid, {})
-
-        if not member:
-            return None
-
-        collection       = member.get("collection", {})
-        ckey             = COLLECTION_CROP_KEY.get(crop_key, "")
-        collection_total = collection.get(ckey, 0)
-
-        jacob = member.get("jacobs_contest") or member.get("jacob2") or member.get("jacob", {})
-        if not jacob:
-            return None
-
-        contests = jacob.get("contests", {})
-        hkey     = HYPIXEL_CROP_KEY.get(crop_key, "")
-
-        crop_contests = {
-            k: v for k, v in contests.items()
-            if f":{hkey}" in k
-        }
-
-        if not crop_contests:
-            return {"found": False, "collection_total": collection_total}
-
-        sorted_contests = sorted(crop_contests.items(), key=lambda x: x[0], reverse=True)
-
-        if mode == "alltime":
-            best = max(crop_contests.values(), key=lambda c: c.get("collected", 0))
-            return {
-                "found":            True,
-                "mode":             "alltime",
-                "score":            best.get("collected", 0),
-                "medal":            best.get("claimed_medal", "NONE").upper(),
-                "position":         best.get("claimed_position", "?"),
-                "out_of":           best.get("claimed_participants", "?"),
-                "total":            len(crop_contests),
-                "collection_total": collection_total,
-            }
-
-        else:
-            recent  = sorted_contests[:10]
-            entries = []
-            for _, v in recent:
-                entries.append({
-                    "score": v.get("collected", 0),
-                    "medal": v.get("claimed_medal", "NONE").upper(),
-                })
-            return {
-                "found":            True,
-                "mode":             "recent",
-                "entries":          entries,
-                "total":            len(crop_contests),
-                "collection_total": collection_total,
-            }
-
-    except Exception as e:
-        print(f"[Hypixel API error] {e}")
         import traceback
         traceback.print_exc()
-        return None
 
+    return alltime_rank, monthly_rank
 
 # ─────────────────────────────────────────
 #  COMMANDS
