@@ -64,23 +64,6 @@ COLLECTION_CROP_KEY = {
     "wildrose":   "WILDROSE",
 }
 
-# Elite leaderboard crop slugs
-ELITE_CROP_SLUG = {
-    "cactus":     "cactus",
-    "carrot":     "carrot",
-    "cocoa":      "cocoa",
-    "melon":      "melon",
-    "mushroom":   "mushroom",
-    "netherwart": "netherwart",
-    "potato":     "potato",
-    "pumpkin":    "pumpkin",
-    "sugarcane":  "sugarcane",
-    "wheat":      "wheat",
-    "sunflower":  "sunflower",
-    "moonflower": "moonflower",
-    "wildrose":   "wildrose",
-}
-
 MEDAL_EMOJI = {
     "BRONZE":   "🥉",
     "SILVER":   "🥈",
@@ -97,8 +80,6 @@ MAX_CROPS   = 3
 JACOB_API   = "https://jacobs.strassburger.dev/api/jacobcontests"
 MOJANG_API  = "https://api.mojang.com/users/profiles/minecraft/{ign}"
 HYPIXEL_API = "https://api.hypixel.net/v2/skyblock/profiles?uuid={uuid}"
-ELITE_API   = "https://api.elitebot.dev/leaderboard/{crop}/{ign}"
-ELITE_API_MONTHLY = "https://api.elitebot.dev/leaderboard/{crop}-monthly/{ign}"
 
 # ─────────────────────────────────────────
 #  STATE
@@ -221,41 +202,6 @@ async def get_uuid(ign: str) -> str | None:
                 return data.get("id")
     except Exception:
         return None
-
-
-async def get_elite_rank(ign: str, crop_key: str) -> tuple[int | None, int | None]:
-    """
-    Returns (alltime_rank, monthly_rank) from Elite leaderboard.
-    None if not ranked / API error.
-    """
-    slug = ELITE_CROP_SLUG.get(crop_key, crop_key)
-    alltime_rank = None
-    monthly_rank = None
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            # All time
-            async with session.get(
-                ELITE_API.format(crop=slug, ign=ign),
-                timeout=aiohttp.ClientTimeout(total=8)
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json(content_type=None)
-                    alltime_rank = data.get("rank") or data.get("position")
-
-            # Monthly
-            async with session.get(
-                ELITE_API_MONTHLY.format(crop=slug, ign=ign),
-                timeout=aiohttp.ClientTimeout(total=8)
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json(content_type=None)
-                    monthly_rank = data.get("rank") or data.get("position")
-
-    except Exception as e:
-        print(f"[Elite API error] {e}")
-
-    return alltime_rank, monthly_rank
 
 
 async def get_jacob_stats(uuid: str, crop_key: str, mode: str) -> dict | None:
@@ -576,11 +522,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Fetch Hypixel stats and Elite rank in parallel
-        stats, (alltime_rank, monthly_rank) = await asyncio.gather(
-            get_jacob_stats(uuid, crop_key, mode),
-            get_elite_rank(ign, crop_key),
-        )
+        stats = await get_jacob_stats(uuid, crop_key, mode)
 
         if stats is None:
             await query.edit_message_text(
@@ -591,19 +533,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         collection_total = stats.get("collection_total", 0)
 
-        # Build rank line
-        rank_parts = []
-        if alltime_rank:
-            rank_parts.append(f"#{alltime_rank} all time")
-        if monthly_rank:
-            rank_parts.append(f"#{monthly_rank} this month")
-        rank_line = f"*Global Rank:* {' · '.join(rank_parts)}" if rank_parts else "*Global Rank:* unranked"
-
         if not stats.get("found"):
             await query.edit_message_text(
                 f"😔 *{ign}* has no {label(crop_key)} contest data.\n\n"
-                f"*Total Harvested:* {collection_total:,}\n"
-                f"{rank_line}\n\n"
+                f"*Total Harvested:* {collection_total:,}\n\n"
                 "They may not have participated in any contests, or their profile is private.",
                 parse_mode="Markdown",
                 reply_markup=back_only(),
@@ -620,7 +553,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = (
                 f"🏆 *{ign}* — {label(crop_key)}\n\n"
                 f"*Total Harvested:* {collection_total:,}\n"
-                f"{rank_line}\n"
                 f"*Best Score:* {stats['score']:,}\n"
                 f"*Best Medal:* {emoji} {medal}\n"
                 f"*Rank that run:* {rank_str}\n"
@@ -630,8 +562,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             lines = [
                 f"📆 *{ign}* — {label(crop_key)} (last {len(stats['entries'])})\n",
-                f"*Total Harvested:* {collection_total:,}",
-                f"{rank_line}\n",
+                f"*Total Harvested:* {collection_total:,}\n",
             ]
             for i, e in enumerate(stats["entries"], 1):
                 medal = e["medal"]
