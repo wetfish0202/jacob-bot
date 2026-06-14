@@ -12,6 +12,7 @@ from telegram.ext import (
 TOKEN           = os.environ.get("BOT_TOKEN")
 HYPIXEL_API_KEY = os.environ.get("HYPIXEL_API_KEY")
 print(f"[startup] HYPIXEL_API_KEY = {HYPIXEL_API_KEY!r}")
+
 # ─────────────────────────────────────────
 #  CROP DEFINITIONS
 # ─────────────────────────────────────────
@@ -31,7 +32,6 @@ CROP_MAP = {
     12: ("wildrose",   "🌹 Wild Rose"),
 }
 
-# Hypixel API uses these internal crop name strings
 HYPIXEL_CROP_KEY = {
     "cactus":     "CACTUS",
     "carrot":     "CARROT",
@@ -48,6 +48,22 @@ HYPIXEL_CROP_KEY = {
     "wildrose":   "WILD_ROSE",
 }
 
+COLLECTION_CROP_KEY = {
+    "cactus":     "CACTUS",
+    "carrot":     "CARROT_ITEM",
+    "cocoa":      "INK_SACK:3",
+    "melon":      "MELON",
+    "mushroom":   "MUSHROOM_COLLECTION",
+    "netherwart": "NETHER_STALK",
+    "potato":     "POTATO_ITEM",
+    "pumpkin":    "PUMPKIN",
+    "sugarcane":  "SUGAR_CANE",
+    "wheat":      "WHEAT",
+    "sunflower":  "SUNFLOWER",
+    "moonflower": "MOONFLOWER",
+    "wildrose":   "WILDROSE",
+}
+
 MEDAL_EMOJI = {
     "BRONZE":   "🥉",
     "SILVER":   "🥈",
@@ -60,17 +76,16 @@ KEY_TO_CODE  = {v[0]: k   for k, v in CROP_MAP.items()}
 KEY_TO_LABEL = {v[0]: v[1] for v in CROP_MAP.values()}
 ALL_KEYS     = list(KEY_TO_CODE.keys())
 
-MAX_CROPS = 3
-JACOB_API = "https://jacobs.strassburger.dev/api/jacobcontests"
-MOJANG_API = "https://api.mojang.com/users/profiles/minecraft/{ign}"
+MAX_CROPS   = 3
+JACOB_API   = "https://jacobs.strassburger.dev/api/jacobcontests"
+MOJANG_API  = "https://api.mojang.com/users/profiles/minecraft/{ign}"
 HYPIXEL_API = "https://api.hypixel.net/v2/skyblock/profiles?uuid={uuid}"
 
 # ─────────────────────────────────────────
 #  STATE
 # ─────────────────────────────────────────
-user_data    = {}   # {user_id: {"fav_all": bool, "list": [key, ...]}}
-sent_alerts  = set()
-# Tracks users currently in "waiting for IGN" state
+user_data       = {}
+sent_alerts     = set()
 waiting_for_ign = set()
 
 
@@ -96,16 +111,16 @@ def back_button() -> list:
 
 def main_menu(fav_all: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⭐ My Favorites",   callback_data="fav")],
-        [InlineKeyboardButton("➕ Add Crop",        callback_data="add")],
-        [InlineKeyboardButton("➖ Remove Crop",     callback_data="remove")],
+        [InlineKeyboardButton("⭐ My Favorites",  callback_data="fav")],
+        [InlineKeyboardButton("➕ Add Crop",       callback_data="add")],
+        [InlineKeyboardButton("➖ Remove Crop",    callback_data="remove")],
         [InlineKeyboardButton(
             "⭐🔥 Fav All  (ALL alerts ON)" if fav_all else "⭐ Fav All",
             callback_data="favall"
         )],
-        [InlineKeyboardButton("🔕 Clear All",       callback_data="clearall")],
-        [InlineKeyboardButton("📅 Next Contests",   callback_data="next")],
-        [InlineKeyboardButton("🔍 Lookup Player",   callback_data="lookup")],
+        [InlineKeyboardButton("🔕 Clear All",      callback_data="clearall")],
+        [InlineKeyboardButton("📅 Next Contests",  callback_data="next")],
+        [InlineKeyboardButton("🔍 Lookup Player",  callback_data="lookup")],
     ])
 
 def back_only() -> InlineKeyboardMarkup:
@@ -123,7 +138,7 @@ def lookup_crop_keyboard(ign: str) -> InlineKeyboardMarkup:
 
 def lookup_period_keyboard(ign: str, crop: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🏆 All Time Best",  callback_data=f"lk_stat_{ign}_{crop}_alltime")],
+        [InlineKeyboardButton("🏆 All Time Best",    callback_data=f"lk_stat_{ign}_{crop}_alltime")],
         [InlineKeyboardButton("📆 Recent (last 10)", callback_data=f"lk_stat_{ign}_{crop}_recent")],
         back_button(),
     ])
@@ -175,7 +190,6 @@ async def fetch_contests() -> list:
 #  HYPIXEL PLAYER LOOKUP
 # ─────────────────────────────────────────
 async def get_uuid(ign: str) -> str | None:
-    """Convert IGN → UUID via Mojang API."""
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -198,64 +212,61 @@ async def get_jacob_stats(uuid: str, crop_key: str, mode: str) -> dict | None:
                 headers={"API-Key": HYPIXEL_API_KEY},
                 timeout=aiohttp.ClientTimeout(total=10)
             ) as resp:
-                print(f"[hypixel] status: {resp.status}")
                 if resp.status != 200:
-                    print(f"[hypixel] bad status, returning None")
                     return None
                 data = await resp.json()
 
-        print(f"[hypixel] success: {data.get('success')}")
+        if not data.get("success"):
+            return None
+
         profiles = data.get("profiles", [])
-        print(f"[hypixel] profiles: {len(profiles)}")
         if not profiles:
             return None
 
         profile = max(profiles, key=lambda p: p.get("last_save", 0))
         members = profile.get("members", {})
-        print(f"[hypixel] member keys: {list(members.keys())}")
-        print(f"[hypixel] uuid lookup: {uuid}")
+        member  = members.get(uuid, {})
 
-        member = members.get(uuid, {})
-        print(f"[hypixel] member found: {bool(member)}")
-        print(f"[hypixel] member keys: {list(member.keys())}")
-        
-        collection = member.get("collection", {})
-        print(f"[hypixel] collection sample: {dict(list(collection.items())[:30])}")
-        jacob = member.get("jacobs_contest") or member.get("jacob2") or member.get("jacob", {})
-        print(f"[hypixel] jacob found: {bool(jacob)}")
+        if not member:
+            return None
 
+        # Collection total
+        collection      = member.get("collection", {})
+        ckey            = COLLECTION_CROP_KEY.get(crop_key, "")
+        collection_total = collection.get(ckey, 0)
+
+        jacob    = member.get("jacobs_contest") or member.get("jacob2") or member.get("jacob", {})
         if not jacob:
             return None
 
         contests = jacob.get("contests", {})
-        hkey = HYPIXEL_CROP_KEY.get(crop_key, "")
+        hkey     = HYPIXEL_CROP_KEY.get(crop_key, "")
 
         crop_contests = {
             k: v for k, v in contests.items()
             if f":{hkey}" in k
         }
 
-        print(f"[hypixel] crop contests found: {len(crop_contests)}")
-
         if not crop_contests:
-            return {"found": False}
+            return {"found": False, "collection_total": collection_total}
 
         sorted_contests = sorted(crop_contests.items(), key=lambda x: x[0], reverse=True)
 
         if mode == "alltime":
             best = max(crop_contests.values(), key=lambda c: c.get("collected", 0))
             return {
-                "found":    True,
-                "mode":     "alltime",
-                "score":    best.get("collected", 0),
-                "medal":    best.get("claimed_medal", "NONE").upper(),
-                "position": best.get("claimed_position", "?"),
-                "out_of":   best.get("claimed_participants", "?"),
-                "total":    len(crop_contests),
+                "found":            True,
+                "mode":             "alltime",
+                "score":            best.get("collected", 0),
+                "medal":            best.get("claimed_medal", "NONE").upper(),
+                "position":         best.get("claimed_position", "?"),
+                "out_of":           best.get("claimed_participants", "?"),
+                "total":            len(crop_contests),
+                "collection_total": collection_total,
             }
 
         else:
-            recent = sorted_contests[:10]
+            recent  = sorted_contests[:10]
             entries = []
             for _, v in recent:
                 entries.append({
@@ -263,10 +274,11 @@ async def get_jacob_stats(uuid: str, crop_key: str, mode: str) -> dict | None:
                     "medal": v.get("claimed_medal", "NONE").upper(),
                 })
             return {
-                "found":   True,
-                "mode":    "recent",
-                "entries": entries,
-                "total":   len(crop_contests),
+                "found":            True,
+                "mode":             "recent",
+                "entries":          entries,
+                "total":            len(crop_contests),
+                "collection_total": collection_total,
             }
 
     except Exception as e:
@@ -308,14 +320,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if user_id not in waiting_for_ign:
-        return  # ignore unrelated messages
+        return
 
     waiting_for_ign.discard(user_id)
     ign = update.message.text.strip()
 
-    msg = await update.message.reply_text(f"🔍 Looking up *{ign}*…", parse_mode="Markdown")
-
+    msg  = await update.message.reply_text(f"🔍 Looking up *{ign}*…", parse_mode="Markdown")
     uuid = await get_uuid(ign)
+
     if not uuid:
         await msg.edit_text(
             f"❌ Player *{ign}* not found.\nCheck the spelling and try again.",
@@ -324,7 +336,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Store IGN in context for next steps
     context.user_data["lookup_ign"]  = ign
     context.user_data["lookup_uuid"] = uuid
 
@@ -400,8 +411,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mins      = minutes_until(c["timestamp"])
             crop_text = "  ".join(label(k) for k in c["crops"])
             time_str  = f"in {int(mins)}m" if mins < 60 else f"in {int(mins // 60)}h {int(mins % 60)}m"
-            # Star if any of user's favourites are in this contest
-            star = "⭐ " if any(k in data["list"] for k in c["crops"]) else ""
+            star      = "⭐ " if any(k in data["list"] for k in c["crops"]) else ""
             lines.append(f"{star}{crop_text}\n_starts {time_str}_\n")
 
         await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=back_only())
@@ -482,12 +492,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Lookup: crop selected ──────────────────────────────────────────
     elif action.startswith("lk_crop_"):
-        # format: lk_crop_{ign}_{cropkey}
-        parts    = action[8:].split("_", 1)  # split on first _ only for ign, then crop
-        # ign may contain underscores so we stored it differently — re-split from end
         crop_key = action.split("_")[-1]
         ign      = "_".join(action[8:].split("_")[:-1])
-
         await query.edit_message_text(
             f"📊 *{ign}* — {label(crop_key)}\n\nWhat do you want to see?",
             parse_mode="Markdown",
@@ -496,10 +502,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Lookup: period selected → fetch stats ──────────────────────────
     elif action.startswith("lk_stat_"):
-        # format: lk_stat_{ign}_{cropkey}_{mode}
         parts    = action[8:].split("_")
-        mode     = parts[-1]          # alltime | recent
-        crop_key = parts[-2]          # e.g. wheat
+        mode     = parts[-1]
+        crop_key = parts[-2]
         ign      = "_".join(parts[:-2])
 
         await query.edit_message_text(
@@ -509,7 +514,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         uuid = context.user_data.get("lookup_uuid")
         if not uuid:
-            # Re-fetch UUID if lost (e.g. after bot restart)
             uuid = await get_uuid(ign)
 
         if not uuid:
@@ -529,31 +533,39 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if not stats.get("found"):
+            total_harvested = stats.get("collection_total", 0)
             await query.edit_message_text(
                 f"😔 *{ign}* has no {label(crop_key)} contest data.\n\n"
-                "They may not have participated in any, or their profile is private.",
+                f"*Total Harvested:* {total_harvested:,}\n\n"
+                "They may not have participated in any contests, or their profile is private.",
                 parse_mode="Markdown",
                 reply_markup=back_only(),
             )
             return
 
+        collection_total = stats.get("collection_total", 0)
+
         if mode == "alltime":
-            medal   = stats["medal"]
-            emoji   = MEDAL_EMOJI.get(medal, "❓")
-            pos     = stats["position"]
-            out_of  = stats["out_of"]
+            medal    = stats["medal"]
+            emoji    = MEDAL_EMOJI.get(medal, "❓")
+            pos      = stats["position"]
+            out_of   = stats["out_of"]
             rank_str = f"#{pos} out of {out_of}" if isinstance(pos, int) else "unknown rank"
 
             text = (
                 f"🏆 *{ign}* — {label(crop_key)}\n\n"
+                f"*Total Harvested:* {collection_total:,}\n"
                 f"*Best Score:* {stats['score']:,}\n"
                 f"*Best Medal:* {emoji} {medal}\n"
                 f"*Rank that run:* {rank_str}\n"
                 f"*Total contests:* {stats['total']}"
             )
 
-        else:  # recent
-            lines = [f"📆 *{ign}* — {label(crop_key)} (last {len(stats['entries'])})\n"]
+        else:
+            lines = [
+                f"📆 *{ign}* — {label(crop_key)} (last {len(stats['entries'])})\n",
+                f"*Total Harvested:* {collection_total:,}\n",
+            ]
             for i, e in enumerate(stats["entries"], 1):
                 medal = e["medal"]
                 emoji = MEDAL_EMOJI.get(medal, "❓")
@@ -609,7 +621,6 @@ async def alert_loop(app):
                     except Exception as e:
                         print(f"[send error] user {user_id}: {e}")
 
-            # Prune old alert IDs (older than 2 hours)
             stale = {a for a in sent_alerts if (now_ms - a[1]) > 2 * 3600 * 1000}
             sent_alerts.difference_update(stale)
 
