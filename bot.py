@@ -3,7 +3,7 @@ import time
 import aiohttp
 import os
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, ContextTypes, filters
@@ -77,22 +77,35 @@ ALL_KEYS     = list(KEY_TO_CODE.keys())
 
 MAX_CROPS      = 3
 DAILY_LOOKUPS  = 3
-WHITELIST_IGNS = {"yo_soy_juanittoo"}   # lowercased for comparison
+WHITELIST_IGNS = {"yo_soy_juanittoo"}
 
 JACOB_API   = "https://jacobs.strassburger.dev/api/jacobcontests"
 MOJANG_API  = "https://api.mojang.com/users/profiles/minecraft/{ign}"
 HYPIXEL_API = "https://api.hypixel.net/v2/skyblock/profiles?uuid={uuid}"
 
 # ─────────────────────────────────────────
+#  REPLY KEYBOARD BUTTON LABELS
+#  These are the text strings the bottom toolbar sends as messages
+# ─────────────────────────────────────────
+BTN_FAVORITES  = "⭐ Favorites"
+BTN_ADD        = "➕ Add Crop"
+BTN_REMOVE     = "➖ Remove"
+BTN_NEXT       = "📅 Next Contests"
+BTN_LOOKUP     = "🔍 Lookup Player"
+BTN_FAVALL     = "⭐ Fav All"
+BTN_CLEARALL   = "🔕 Clear All"
+
+TOOLBAR_BUTTONS = {BTN_FAVORITES, BTN_ADD, BTN_REMOVE, BTN_NEXT, BTN_LOOKUP, BTN_FAVALL, BTN_CLEARALL}
+
+# ─────────────────────────────────────────
 #  STATE
 # ─────────────────────────────────────────
-user_data       = {}    # {user_id: {"fav_all": bool, "list": [key, ...]}}
+user_data       = {}
 sent_alerts     = set()
 waiting_for_ign = set()
+lookup_log      = {}
 
-# Lookup rate limit: {user_id: [timestamp, timestamp, ...]}
-# Keeps only the timestamps of lookups in the last 24h
-lookup_log = {}
+WINDOW = 24 * 3600
 
 
 # ─────────────────────────────────────────
@@ -112,35 +125,24 @@ def minutes_until(ts_ms: int) -> float:
 # ─────────────────────────────────────────
 #  RATE LIMIT
 # ─────────────────────────────────────────
-WINDOW = 24 * 3600  # 24 hours in seconds
-
 def check_lookup_limit(user_id: int, ign: str) -> tuple[bool, str]:
-    """
-    Returns (allowed, message).
-    Whitelisted IGNs are always allowed.
-    Otherwise max DAILY_LOOKUPS per 24h window.
-    """
     if ign.lower() in WHITELIST_IGNS:
         return True, ""
 
-    now       = time.time()
-    history   = lookup_log.get(user_id, [])
-    # Keep only lookups within the last 24h
-    history   = [t for t in history if now - t < WINDOW]
+    now     = time.time()
+    history = [t for t in lookup_log.get(user_id, []) if now - t < WINDOW]
     lookup_log[user_id] = history
 
     if len(history) >= DAILY_LOOKUPS:
-        # Time until the oldest lookup expires
-        oldest       = min(history)
-        resets_in    = WINDOW - (now - oldest)
-        hours        = int(resets_in // 3600)
-        mins         = int((resets_in % 3600) // 60)
-        reset_str    = f"{hours}h {mins}m" if hours else f"{mins}m"
+        oldest    = min(history)
+        resets_in = WINDOW - (now - oldest)
+        hours     = int(resets_in // 3600)
+        mins      = int((resets_in % 3600) // 60)
+        reset_str = f"{hours}h {mins}m" if hours else f"{mins}m"
         return False, (
             f"⏳ You've used all {DAILY_LOOKUPS} lookups for today.\n\n"
             f"Resets in *{reset_str}*."
         )
-
     return True, ""
 
 def record_lookup(user_id: int):
@@ -150,27 +152,25 @@ def record_lookup(user_id: int):
 # ─────────────────────────────────────────
 #  KEYBOARDS
 # ─────────────────────────────────────────
+def toolbar() -> ReplyKeyboardMarkup:
+    """Persistent bottom toolbar — always visible."""
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton(BTN_FAVORITES), KeyboardButton(BTN_ADD),    KeyboardButton(BTN_REMOVE)],
+            [KeyboardButton(BTN_NEXT),      KeyboardButton(BTN_LOOKUP), KeyboardButton(BTN_FAVALL)],
+            [KeyboardButton(BTN_CLEARALL)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
 def back_button() -> list:
     return [InlineKeyboardButton("« Back", callback_data="back")]
-
-def main_menu(fav_all: bool = False) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⭐ My Favorites",  callback_data="fav")],
-        [InlineKeyboardButton("➕ Add Crop",       callback_data="add")],
-        [InlineKeyboardButton("➖ Remove Crop",    callback_data="remove")],
-        [InlineKeyboardButton(
-            "⭐🔥 Fav All  (ALL alerts ON)" if fav_all else "⭐ Fav All",
-            callback_data="favall"
-        )],
-        [InlineKeyboardButton("🔕 Clear All",      callback_data="clearall")],
-        [InlineKeyboardButton("📅 Next Contests",  callback_data="next")],
-        [InlineKeyboardButton("🔍 Lookup Player",  callback_data="lookup")],
-    ])
 
 def back_only() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([back_button()])
 
-def crop_keyboard(prefix: str, keys: list) -> InlineKeyboardMarkup:
+def inline_crop_keyboard(prefix: str, keys: list) -> InlineKeyboardMarkup:
     buttons = [[InlineKeyboardButton(label(k), callback_data=f"{prefix}{k}")] for k in keys]
     buttons.append(back_button())
     return InlineKeyboardMarkup(buttons)
@@ -181,7 +181,7 @@ def lookup_crop_keyboard(ign: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 def lookup_period_keyboard(ign: str, crop: str) -> InlineKeyboardMarkup:
-    crop_label = label(crop).split(" ", 1)[-1]  # strip emoji for button text
+    crop_label = label(crop).split(" ", 1)[-1]
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(
             f"🏆 Best {crop_label} Contest (All Time)",
@@ -341,13 +341,13 @@ async def get_jacob_stats(uuid: str, crop_key: str, mode: str) -> dict | None:
 #  COMMANDS
 # ─────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = get_user(update.effective_user.id)
     await update.message.reply_text(
         "🌾 *Jacob's Farming Contest Bot*\n\n"
         "Get notified 10 minutes before your favourite crops contest.\n\n"
+        "Use the buttons below to get started.\n\n"
         "_Data by_ [jacobs.strassburger.dev](https://jacobs.strassburger.dev)",
         parse_mode="Markdown",
-        reply_markup=main_menu(data["fav_all"]),
+        reply_markup=toolbar(),
     )
 
 
@@ -363,109 +363,84 @@ async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────
-#  FREE TEXT HANDLER (IGN entry)
+#  TOOLBAR TEXT HANDLER
+#  Handles both toolbar button presses AND IGN text entry
 # ─────────────────────────────────────────
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
-    if user_id not in waiting_for_ign:
-        return
-
-    waiting_for_ign.discard(user_id)
-    ign = update.message.text.strip()
-
-    # Check rate limit BEFORE hitting any API
-    allowed, limit_msg = check_lookup_limit(user_id, ign)
-    if not allowed:
-        await update.message.reply_text(
-            limit_msg,
-            parse_mode="Markdown",
-            reply_markup=back_only(),
-        )
-        return
-
-    msg  = await update.message.reply_text(f"🔍 Looking up *{ign}*…", parse_mode="Markdown")
-    uuid = await get_uuid(ign)
-
-    if not uuid:
-        await msg.edit_text(
-            f"❌ Player *{ign}* not found.\nCheck the spelling and try again.",
-            parse_mode="Markdown",
-            reply_markup=back_only(),
-        )
-        return
-
-    # Only record after a successful lookup
-    record_lookup(user_id)
-
-    context.user_data["lookup_ign"]  = ign
-    context.user_data["lookup_uuid"] = uuid
-
-    await msg.edit_text(
-        f"✅ Found *{ign}*!\n\nWhich crop do you want to check?",
-        parse_mode="Markdown",
-        reply_markup=lookup_crop_keyboard(ign),
-    )
-
-
-# ─────────────────────────────────────────
-#  BUTTON HANDLER
-# ─────────────────────────────────────────
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query   = update.callback_query
-    await query.answer()
-
-    user_id = query.from_user.id
+    text    = update.message.text.strip()
     data    = get_user(user_id)
-    action  = query.data
 
-    # ── Back ───────────────────────────────────────────────────────────
-    if action == "back":
+    # ── IGN entry (user is mid-lookup flow) ───────────────────────────
+    if user_id in waiting_for_ign and text not in TOOLBAR_BUTTONS:
         waiting_for_ign.discard(user_id)
-        await query.edit_message_text(
-            "🌾 *Jacob's Farming Contest Bot*\nChoose an option:",
-            parse_mode="Markdown",
-            reply_markup=main_menu(data["fav_all"]),
-        )
+        ign = text
 
-    # ── My Favorites ───────────────────────────────────────────────────
-    elif action == "fav":
+        allowed, limit_msg = check_lookup_limit(user_id, ign)
+        if not allowed:
+            await update.message.reply_text(limit_msg, parse_mode="Markdown")
+            return
+
+        msg  = await update.message.reply_text(f"🔍 Looking up *{ign}*…", parse_mode="Markdown")
+        uuid = await get_uuid(ign)
+
+        if not uuid:
+            await msg.edit_text(
+                f"❌ Player *{ign}* not found.\nCheck the spelling and try again.",
+                parse_mode="Markdown",
+            )
+            return
+
+        record_lookup(user_id)
+        context.user_data["lookup_ign"]  = ign
+        context.user_data["lookup_uuid"] = uuid
+
+        await msg.edit_text(
+            f"✅ Found *{ign}*!\n\nWhich crop do you want to check?",
+            parse_mode="Markdown",
+            reply_markup=lookup_crop_keyboard(ign),
+        )
+        return
+
+    # ── Toolbar buttons ────────────────────────────────────────────────
+
+    if text == BTN_FAVORITES:
         crops = data["list"]
-        text  = (
+        reply = (
             "⭐ *Your Favorites:*\n\n" + "\n".join(f"• {label(c)}" for c in crops)
             if crops else
-            "⭐ *Your Favorites:*\n\nNone yet — use ➕ Add Crop to get started."
+            "⭐ *Your Favorites:*\n\nNone yet — tap ➕ Add Crop to get started."
         )
-        await query.edit_message_text(text, parse_mode="Markdown", reply_markup=back_only())
+        await update.message.reply_text(reply, parse_mode="Markdown")
 
-    # ── Fav All ────────────────────────────────────────────────────────
-    elif action == "favall":
-        data["fav_all"] = True
-        data["list"]    = ALL_KEYS[:]
-        await query.edit_message_text(
-            "⭐🔥 *Fav All enabled!*\n\nYou'll get alerts for every crop contest.",
+    elif text == BTN_ADD:
+        waiting_for_ign.discard(user_id)
+        available = [k for k in ALL_KEYS if k not in data["list"]]
+        if not available:
+            await update.message.reply_text("✅ *You're already tracking all crops!*", parse_mode="Markdown")
+            return
+        await update.message.reply_text(
+            "➕ *Which crop do you want to add?*",
             parse_mode="Markdown",
-            reply_markup=back_only(),
+            reply_markup=inline_crop_keyboard("add_", available),
         )
 
-    # ── Clear All ──────────────────────────────────────────────────────
-    elif action == "clearall":
-        data["fav_all"] = False
-        data["list"]    = []
-        await query.edit_message_text(
-            "🔕 *Cleared.*\n\nNo alerts until you add crops again.",
+    elif text == BTN_REMOVE:
+        waiting_for_ign.discard(user_id)
+        if not data["list"]:
+            await update.message.reply_text("ℹ️ *Nothing to remove.*", parse_mode="Markdown")
+            return
+        await update.message.reply_text(
+            "➖ *Which crop do you want to remove?*",
             parse_mode="Markdown",
-            reply_markup=back_only(),
+            reply_markup=inline_crop_keyboard("rem_", data["list"]),
         )
 
-    # ── Next Contests ──────────────────────────────────────────────────
-    elif action == "next":
+    elif text == BTN_NEXT:
+        waiting_for_ign.discard(user_id)
         contests = await fetch_contests()
         if not contests:
-            await query.edit_message_text(
-                "⚠️ Couldn't fetch data right now. Try again later.",
-                reply_markup=back_only(),
-            )
+            await update.message.reply_text("⚠️ Couldn't fetch data right now. Try again later.")
             return
 
         lines = ["📅 *Upcoming Contests:*\n"]
@@ -476,24 +451,51 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             star      = "⭐ " if any(k in data["list"] for k in c["crops"]) else ""
             lines.append(f"{star}{crop_text}\n_starts {time_str}_\n")
 
-        await query.edit_message_text("\n".join(lines), parse_mode="Markdown", reply_markup=back_only())
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
-    # ── Add menu ───────────────────────────────────────────────────────
-    elif action == "add":
-        available = [k for k in ALL_KEYS if k not in data["list"]]
-        if not available:
-            await query.edit_message_text(
-                "✅ *You're already tracking all crops!*",
-                parse_mode="Markdown",
-                reply_markup=back_only(),
-            )
-            return
-        await query.edit_message_text(
-            "➕ *Which crop do you want to add?*",
+    elif text == BTN_LOOKUP:
+        waiting_for_ign.add(user_id)
+        await update.message.reply_text(
+            "🔍 *Player Lookup*\n\nType your Minecraft IGN:",
             parse_mode="Markdown",
-            reply_markup=crop_keyboard("add_", available),
         )
 
+    elif text == BTN_FAVALL:
+        waiting_for_ign.discard(user_id)
+        data["fav_all"] = True
+        data["list"]    = ALL_KEYS[:]
+        await update.message.reply_text(
+            "⭐🔥 *Fav All enabled!*\n\nYou'll get alerts for every crop contest.",
+            parse_mode="Markdown",
+        )
+
+    elif text == BTN_CLEARALL:
+        waiting_for_ign.discard(user_id)
+        data["fav_all"] = False
+        data["list"]    = []
+        await update.message.reply_text(
+            "🔕 *Cleared.*\n\nNo alerts until you add crops again.",
+            parse_mode="Markdown",
+        )
+
+
+# ─────────────────────────────────────────
+#  INLINE BUTTON HANDLER (submenus only)
+# ─────────────────────────────────────────
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query   = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    data    = get_user(user_id)
+    action  = query.data
+
+    # ── Back — just close the inline menu cleanly ──────────────────────
+    if action == "back":
+        waiting_for_ign.discard(user_id)
+        await query.delete_message()
+
+    # ── Add crop ───────────────────────────────────────────────────────
     elif action.startswith("add_"):
         key = action[4:]
         if data["fav_all"]:
@@ -504,7 +506,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if len(data["list"]) >= MAX_CROPS:
             await query.edit_message_text(
-                f"⚠️ *Max {MAX_CROPS} crops reached.*\n\nRemove one first, or use Fav All.",
+                f"⚠️ *Max {MAX_CROPS} crops reached.*\n\nRemove one first, or tap ⭐ Fav All.",
                 parse_mode="Markdown",
                 reply_markup=back_only(),
             )
@@ -516,21 +518,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=back_only(),
         )
 
-    # ── Remove menu ────────────────────────────────────────────────────
-    elif action == "remove":
-        if not data["list"]:
-            await query.edit_message_text(
-                "ℹ️ *Nothing to remove.*",
-                parse_mode="Markdown",
-                reply_markup=back_only(),
-            )
-            return
-        await query.edit_message_text(
-            "➖ *Which crop do you want to remove?*",
-            parse_mode="Markdown",
-            reply_markup=crop_keyboard("rem_", data["list"]),
-        )
-
+    # ── Remove crop ────────────────────────────────────────────────────
     elif action.startswith("rem_"):
         key = action[4:]
         if key in data["list"]:
@@ -539,15 +527,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data["fav_all"] = False
         await query.edit_message_text(
             f"🗑 *{label(key)}* removed.",
-            parse_mode="Markdown",
-            reply_markup=back_only(),
-        )
-
-    # ── Lookup Player ──────────────────────────────────────────────────
-    elif action == "lookup":
-        waiting_for_ign.add(user_id)
-        await query.edit_message_text(
-            "🔍 *Player Lookup*\n\nType your Minecraft IGN:",
             parse_mode="Markdown",
             reply_markup=back_only(),
         )
@@ -562,7 +541,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=lookup_period_keyboard(ign, crop_key),
         )
 
-    # ── Lookup: period selected → fetch stats ──────────────────────────
+    # ── Lookup: period → fetch stats ───────────────────────────────────
     elif action.startswith("lk_stat_"):
         parts    = action[8:].split("_")
         mode     = parts[-1]
@@ -622,7 +601,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"*Rank that run:* {rank_str}\n"
                 f"*Total {crop_label} contests:* {stats['total']}"
             )
-
         else:
             lines = [
                 f"📆 *{ign}* — Last {len(stats['entries'])} {crop_label} Contests\n",
