@@ -76,8 +76,6 @@ KEY_TO_LABEL = {v[0]: v[1] for v in CROP_MAP.values()}
 ALL_KEYS     = list(KEY_TO_CODE.keys())
 
 MAX_CROPS      = 3
-DAILY_LOOKUPS  = 3
-WHITELIST_IGNS = {"yo_soy_juanittoo"}
 
 JACOB_API   = "https://jacobs.strassburger.dev/api/jacobcontests"
 MOJANG_API  = "https://api.mojang.com/users/profiles/minecraft/{ign}"
