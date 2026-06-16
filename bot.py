@@ -252,7 +252,10 @@ async def get_uuid(ign: str) -> str | None:
                 if resp.status != 200:
                     return None
                 data = await resp.json()
-                return data.get("id")
+                raw = data.get("id")
+                if raw:
+                    return f"{raw[:8]}-{raw[8:12]}-{raw[12:16]}-{raw[16:20]}-{raw[20:]}"
+                return None
     except Exception:
         return None
 
