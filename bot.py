@@ -281,7 +281,8 @@ async def get_jacob_stats(uuid: str, crop_key: str, mode: str) -> dict | None:
 
         profile = max(profiles, key=lambda p: p.get("last_save", 0))
         members = profile.get("members", {})
-        member  = members.get(uuid, {})
+        uuid_nodash = uuid.replace("-", "")
+        member      = members.get(uuid_nodash, {}) or members.get(uuid, {}) 
 
         if not member:
             return None
