@@ -243,22 +243,126 @@ async def fetch_contests() -> list:
 #  HYPIXEL PLAYER LOOKUP
 # ─────────────────────────────────────────
 async def get_uuid(ign: str) -> str | None:
+    """Return Mojang UUID without dashes, which Hypixel profile member keys use."""
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 MOJANG_API.format(ign=ign),
-                timeout=aiohttp.ClientTimeout(total=8)
+                timeout=aiohttp.ClientTimeout(total=8),
             ) as resp:
                 if resp.status != 200:
+                    print(f"[Mojang API error] status={resp.status} ign={ign}")
                     return None
-                data = await resp.json()
-                raw = data.get("id")
-                if raw:
-                    return f"{raw[:8]}-{raw[8:12]}-{raw[12:16]}-{raw[16:20]}-{raw[20:]}"
-                return None
-    except Exception:
+
+                data = await resp.json(content_type=None)
+                return data.get("id")
+    except Exception as e:
+        print(f"[Mojang API error] {e}")
         return None
 
+
+async def get_jacob_stats(uuid: str, crop_key: str, mode: str) -> dict | None:
+    if not HYPIXEL_API_KEY:
+        print("[Hypixel API error] Missing HYPIXEL_API_KEY environment variable")
+        return {"error": "Missing HYPIXEL_API_KEY on the server."}
+
+    uuid_nodash = uuid.replace("-", "")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                HYPIXEL_API.format(uuid=uuid_nodash),
+                headers={"API-Key": HYPIXEL_API_KEY},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                text = await resp.text()
+
+                if resp.status != 200:
+                    print(f"[Hypixel API error] status={resp.status} body={text}")
+                    return {"error": f"Hypixel returned HTTP {resp.status}."}
+
+                try:
+                    data = await resp.json(content_type=None)
+                except Exception:
+                    print(f"[Hypixel API error] Invalid JSON body={text}")
+                    return {"error": "Hypixel returned invalid JSON."}
+
+        if not data.get("success"):
+            cause = data.get("cause", "Unknown Hypixel API error.")
+            print(f"[Hypixel API error] success=false cause={cause}")
+            return {"error": cause}
+
+        profiles = data.get("profiles") or []
+        if not profiles:
+            return {"error": "No SkyBlock profiles found for this player."}
+
+        def profile_last_save(profile: dict) -> int:
+            member = profile.get("members", {}).get(uuid_nodash, {})
+            return member.get("last_save", 0)
+
+        profile = max(profiles, key=profile_last_save)
+        members = profile.get("members", {})
+        member = members.get(uuid_nodash)
+
+        if not member:
+            return {"error": "Could not find this player inside their SkyBlock profile data."}
+
+        collection = member.get("collection", {})
+        ckey = COLLECTION_CROP_KEY.get(crop_key, "")
+        collection_total = collection.get(ckey, 0)
+
+        jacob = member.get("jacob2") or member.get("jacobs_contest") or member.get("jacob") or {}
+        contests = jacob.get("contests", {})
+
+        if not contests:
+            return {"found": False, "collection_total": collection_total}
+
+        hkey = HYPIXEL_CROP_KEY.get(crop_key, "")
+        crop_contests = {
+            k: v for k, v in contests.items()
+            if f":{hkey}" in k
+        }
+
+        if not crop_contests:
+            return {"found": False, "collection_total": collection_total}
+
+        sorted_contests = sorted(crop_contests.items(), key=lambda x: x[0], reverse=True)
+
+        if mode == "alltime":
+            best = max(crop_contests.values(), key=lambda c: c.get("collected", 0))
+            return {
+                "found": True,
+                "mode": "alltime",
+                "score": best.get("collected", 0),
+                "medal": best.get("claimed_medal", "NONE").upper(),
+                "position": best.get("claimed_position", "?"),
+                "out_of": best.get("claimed_participants", "?"),
+                "total": len(crop_contests),
+                "collection_total": collection_total,
+            }
+
+        recent = sorted_contests[:10]
+        entries = [
+            {
+                "score": v.get("collected", 0),
+                "medal": v.get("claimed_medal", "NONE").upper(),
+            }
+            for _, v in recent
+        ]
+
+        return {
+            "found": True,
+            "mode": "recent",
+            "entries": entries,
+            "total": len(crop_contests),
+            "collection_total": collection_total,
+        }
+
+    except Exception as e:
+        print(f"[Hypixel API error] {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
 
 async def get_jacob_stats(uuid: str, crop_key: str, mode: str) -> dict | None:
     try:
@@ -572,12 +676,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         stats = await get_jacob_stats(uuid, crop_key, mode)
 
-        if stats is None:
-            await query.edit_message_text(
-                "⚠️ Hypixel API error. Try again in a moment.",
-                reply_markup=back_only(),
-            )
-            return
+        if stats is None or stats.get("error"):
+			reason = stats.get("error") if isinstance(stats, dict) else "Unknown error."
+			await query.edit_message_text(
+			f"⚠️ Hypixel API error:\n\n{reason}",
+			reply_markup=back_only(),
+			)
+			return
 
         collection_total = stats.get("collection_total", 0)
         crop_label       = label(crop_key)
