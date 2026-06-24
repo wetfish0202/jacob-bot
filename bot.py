@@ -74,9 +74,9 @@ KEY_TO_LABEL = {v[0]: v[1] for v in CROP_MAP.values()}
 ALL_KEYS = list(KEY_TO_CODE.keys())
 
 MAX_CROPS = 3
-DAILY_LOOKUPS = 3
+LOOKUP_LIMIT = 50
 WHITELIST_IGNS = {"yo_soy_juanittoo"}
-WINDOW = 24 * 3600
+WINDOW = 10 * 60
 
 JACOB_API = "https://jacobs.strassburger.dev/api/jacobcontests"
 MOJANG_API = "https://api.mojang.com/users/profiles/minecraft/{ign}"
@@ -122,14 +122,15 @@ def check_lookup_limit(user_id: int, ign: str) -> tuple[bool, str]:
     history = [t for t in lookup_log.get(user_id, []) if now - t < WINDOW]
     lookup_log[user_id] = history
 
-    if len(history) >= DAILY_LOOKUPS:
+    if len(history) >= LOOKUP_LIMIT:
         oldest = min(history)
         resets_in = WINDOW - (now - oldest)
-        hours = int(resets_in // 3600)
-        mins = int((resets_in % 3600) // 60)
-        reset_str = f"{hours}h {mins}m" if hours else f"{mins}m"
+        mins = int(resets_in // 60)
+        secs = int(resets_in % 60)
+        reset_str = f"{mins}m {secs}s" if mins else f"{secs}s"
+
         return False, (
-            f"⏳ You've used all {DAILY_LOOKUPS} lookups for today.\n\n"
+            f"⏳ You've used all {LOOKUP_LIMIT} lookups for this 10-minute window.\n\n"
             f"Resets in *{reset_str}*."
         )
 
